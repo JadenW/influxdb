@@ -14,6 +14,7 @@ import (
 	"github.com/influxdata/flux/stdlib/universe"
 	"github.com/influxdata/influxdb/v2/kit/feature"
 	"github.com/influxdata/influxdb/v2/query"
+	"github.com/pkg/errors"
 )
 
 func init() {
@@ -30,6 +31,7 @@ func init() {
 		PushDownWindowAggregateRule{},
 		// PushDownBareAggregateRule{},
 		PushDownGroupAggregateRule{},
+		SwitchFillImplRule{},
 	)
 }
 
@@ -945,4 +947,28 @@ func canPushGroupedAggregate(ctx context.Context, pn plan.Node) bool {
 			agg.Column == execute.DefaultValueColLabel
 	}
 	return false
+}
+
+type SwitchFillImplRule struct{}
+
+func (SwitchFillImplRule) Name() string {
+	return "SwitchFillImplRule"
+}
+
+func (SwitchFillImplRule) Pattern() plan.Pattern {
+	return plan.Pat(universe.FillKind, plan.Any())
+}
+
+func (r SwitchFillImplRule) Rewrite(ctx context.Context, pn plan.Node) (plan.Node, bool, error) {
+	if !feature.MemoryOptimizedFill().Enabled(ctx) {
+		if mutableFillSpec, ok := pn.ProcedureSpec().Copy().(plan.DualImplProcedureSpec); ok  {
+			mutableFillSpec.Fallback()
+			if err := pn.ReplaceSpec(mutableFillSpec); err != nil {
+				return nil, false, err
+			}
+		} else {
+			return nil, false, errors.New("FillProcedureSpec is no longer a DualImplProcedureSpec, SwitchFillImplRule should be removed too.")
+		}
+	}
+	return pn, false, nil
 }
